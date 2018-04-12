@@ -199,6 +199,137 @@ def closure (vis, tel, lastv=-1, plotfile='clplot.png'):
         plt.savefig(plotfile)
     return np.nanmean(np.gradient(np.unwrap(clph))**2)
 
+
+
+def closure(vis,tel,lastv=-1,pol=0,use_spw=0,bchan=0,echan=-1,doplot=False,doret=False):
+
+    # Find target source id
+    target_id = vis.split('/')[-1].split('_')[0]
+    print "target_id", target_id
+    print "Antennas for closure phase", tel
+
+    # Find array of requested telescopes and list of telescopes in data
+    command = 'taql \'select NAME from %s/ANTENNA\' >closure_txt'%vis
+    os.system(command)
+    os.system('grep -v select closure_txt >closure_which')
+    idxtel = np.loadtxt('closure_which',dtype='S')
+    atel = np.unique(np.ravel(tel))
+
+    # For each requested telescope, determine its position in the list
+    # If more than one telescope in the list match to within the number
+    #   of letters in the requested telescope, keep the first (so CS002
+    #   will match to CS002HBA0 and CS002HBA1 will be ignored)
+    # Keep a list of telescopes not found, to print if we need to crash
+    notfound = []
+    aidx = np.array([],dtype='int')
+    for a in atel:
+        found_this = False
+        for i in range(len(idxtel)):
+            if a==idxtel[i][:len(a)]:
+                aidx = np.append(aidx,i)
+                found_this = True
+        if not found_this:
+            notfound.append (a)
+
+    if len(notfound):
+        print 'The following telescopes were not found:',notfound
+
+
+    aidx_s = np.sort(aidx)
+
+    # Make a smaller MS 'as plain' with the required baseline. This is slow
+    # but only needs doing once for an arbitrary number of baselines.
+    if os.path.exists ('cl_temp.ms'):
+        os.system('rm -fr cl_temp.ms')
+    command = 'taql \'select from %s where ' % vis
+    for i in range (len(aidx_s)):
+        for j in range (i+1, len(aidx_s)):
+            command += ('ANTENNA1==%d and ANTENNA2==%d' % \
+                            (aidx_s[i],aidx_s[j]))
+            if i==len(aidx_s)-2 and j==len(aidx_s)-1:
+                command += (' giving cl_temp.ms as plain\'')
+            else:
+                command += (' or ')
+
+    print 'Selecting smaller MS cl_temp.ms, this will take about 4s/Gb:'
+    os.system (command)
+
+
+    # Loop around the requested closure triangles
+    clstats = np.array([])
+    for tr in tel:
+        tri = np.array([],dtype='int')
+        for i in range(3):
+            tri = np.append (tri, aidx[np.argwhere(atel==tr[i])[0][0]])
+        tri = np.sort(tri)
+        # Make three reference MSs with pointers into the small MS
+        command = 'taql \'select from cl_temp.ms where ANTENNA1==%d and ANTENNA2==%d giving closure_temp1.ms\'' %(tri[0],tri[1])
+        os.system(command)
+        command = 'taql \'select from cl_temp.ms where ANTENNA1==%d and ANTENNA2==%d giving closure_temp2.ms\'' %(tri[1],tri[2])
+        os.system(command)
+        command = 'taql \'select from cl_temp.ms where ANTENNA1==%d and ANTENNA2==%d giving closure_temp3.ms\'' %(tri[0],tri[2])
+        os.system(command)
+
+        # Load data arrays and get amp, closure phase
+        t1 = pt.table('closure_temp1.ms')
+        t2 = pt.table('closure_temp2.ms')
+        t3 = pt.table('closure_temp3.ms')
+        ut = t1.select('TIME')
+        spw = t1.select('DATA_DESC_ID')
+        d1,d2,d3 = t1.select('DATA'), t2.select('DATA'), t3.select('DATA')
+        cp = get_amp_clph(d1[:lastv],d2[:lastv],d3[:lastv],spw[:lastv],
+             pol=0, use_spw=use_spw, bchan=bchan, echan=echan)
+        try:
+            allcp.append(cp)
+        except:
+            allcp = [cp]
+
+        os.system('rm -fr closure_temp*ms')
+        if os.path.exists ('closure_which'):
+            os.system('rm closure_which')
+        clstats = np.append (clstats, np.nanmean(np.gradient(np.unwrap(cp))**2))
+    if doplot:
+        cl_mkplot (allcp,tel,target_id)
+    clstats = clstats[0] if len(clstats)==1 else clstats
+    if doret:
+        return clstats,allcp
+    else:
+        return clstats
+
+def cl_mkplot(allcp,tel,target_id):
+    ny = int(np.floor(np.sqrt(np.float(len(allcp)))))
+    nx = 1+len(allcp)/ny if len(allcp)%ny else len(allcp)/ny
+    matplotlib.rcParams.update({'font.size':8-nx//2})
+    for i in range(len(allcp)):
+        ax=plt.subplot(nx,ny,i+1)
+        plt.plot(allcp[i],'b,')
+        plt.xlabel('Sample number')
+        plt.ylabel('Phase/rad')
+        plt.text(0.01,0.9,'%s %s-%s-%s'%(target_id,tel[i,0],tel[i,1],tel[i,2]),\
+                 transform=ax.transAxes)
+    plt.savefig('%s_closure.png'%target_id,bbox_inches='tight')
+
+def get_amp_clph(d1,d2,d3,spw,pol=0,use_spw=0,bchan=0,echan=-1):
+    a1,a2,a3,cp = np.array([]),np.array([]),np.array([]),np.array([])
+    p1,p2,p3 = np.array([]),np.array([]),np.array([])
+    nchan = np.int(len(d1[0]['DATA']))
+    bchan = max(bchan,0)
+    if echan==-1 or echan<nchan:
+        echan=nchan
+    for i in range(len(d1)):
+        if spw[i].values()[0] != use_spw:
+            continue
+        vis1,vis2,vis3 = d1[i]['DATA'][bchan:echan,pol],\
+                         d2[i]['DATA'][bchan:echan,pol],\
+                         d3[i]['DATA'][bchan:echan,pol]
+        pd1,pd2,pd3 = np.nansum(vis1),np.nansum(vis2),np.nansum(vis3)
+        p1 = np.append(p1, np.arctan2 (pd1.imag,pd1.real))
+        p2 = np.append(p2, np.arctan2 (pd2.imag,pd2.real))
+        p3 = np.append(p3, np.arctan2 (pd3.imag,pd3.real))
+    return p1+p2-p3
+
+
+
 ################### correlate ##########################
 
 def astropy_sep (tra1,tdec1,tra2,tdec2):
@@ -685,7 +816,7 @@ def skynet_NDPPP (vis,model,solint=1.0):
     os.system('NDPPP NDPPP.parset')
 
 
-def main (vis, self_cal_script, firstnpy, mode=3, closure_tels=['ST001','DE601','DE605'],cthr=1.6, model_only=0, smodel=1.0):
+def main (vis, self_cal_script, firstnpy, mode=3, closure_tels='ST001;DE601;DE605',cthr=1.6, model_only=0, smodel=1.0, dopipe=True, lastv=-1, pol=0, use_spw=0,bchan=0,echan=-1,doplot=False,doret=False):
 
     ## make sure the parameters are the correct format
     mode = int( mode )
@@ -697,11 +828,30 @@ def main (vis, self_cal_script, firstnpy, mode=3, closure_tels=['ST001','DE601',
 	closure_tels = closure_tels.split(';')
     
     ra,dec = taql_from (vis, 'FIELD', 'PHASE_DIR')
-    # convert to ??
-    closure_scatter = closure(vis, closure_tels, plotfile='')
-    print closure_scatter
-    if closure_scatter > cthr:
-        return closure_scatter
+    
+    ## prepare the information for getting the closure phase scatter
+    tel = np.array(closure_tels.split(';'))
+    if len(tel)%3:
+        print 'Station list is not a multiple of 3 long, truncating it...'
+        tel = tel[0:3*(len(tel)//3)]
+    if dopipe and len(tel)>3:
+        print 'dopipe True, truncating to 3 telescopes'
+        tel = tel[:3]
+    tel = tel.reshape(len(tel)/3,3)
+    closure_scatter = closure(vis, tel,lastv=lastv,pol=pol,use_spw=use_spw,bchan=bchan,echan=echan,doplot=doplot,doret=doret)
+    if dopipe:
+	print '\n Scatter for the direction ' + vis.split('/')[-1].split('_')[0] + ' is %s \n' % closure_scatter
+        os.system('echo Scatter for the direction ' + vis.split('/')[-1].split('_')[0] + ' is ' + str(scatter_cp) + ' >> closure_phases.txt')
+    else:
+	try:
+	    allret.append(closure_scatter)
+	except:
+	    allret = [closure_scatter]
+
+    ## check if it's sensible
+    if dopipe:
+        if closure_scatter > cthr:
+            return closure_scatter
     if mode == 1:     # this is the default of the self_calibration_pipeline_V2.
 	print 'mode 1: wsclean model'
         os.system('python '+self_cal_script+' '+vis+' -p') # amplitudes?

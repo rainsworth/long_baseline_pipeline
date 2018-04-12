@@ -4,7 +4,7 @@
 # Please read the instructions and report bugs on: https://github.com/lmorabit/long_baseline_pipeline
 
 ## STEPS TO RUN#
-pipeline.steps = [mk_results_dir, mk_calresults_dir, mk_inspect_dir, mk_ionex_dir, createmap_target, createmap_ps, createmap_ps_tables, make_ps_out_mapfile, copy_sols, createmap_pstwo, match_files, ndppp_prep_target, combine_data_target_map, get_ion_files, transfer_amp_clock_sols, is_amp_gains, is_add_phase, ndppp_apply_cal, get_lbcs_catalogue, calibrator_loop1, createmap_plots, destmap_plots, cp_closure_phase_png, closure_phase_file, find_delay_cal, delay_cal_model, delay_cal_model_map, createmap_tables, calib_cal, h5imp_cal, copy_h5imp_cal, process_losoto, convert_ct, plots, createmap_cal_pngs, copy_cal_pngs, createmap_cal_txts, copy_cal_txts, mk_cal_values_dir, createmap_cal_npys, copy_cal_npys, copyST_gains, ndppp_apply_delay ]
+pipeline.steps = [mk_results_dir, mk_calresults_dir, mk_inspect_dir, mk_ionex_dir, createmap_target, createmap_ps, createmap_ps_tables, make_ps_out_mapfile, copy_sols, createmap_pstwo, match_files, ndppp_prep_target, combine_data_target_map, get_ion_files, transfer_amp_clock_sols, is_amp_gains, is_add_phase, ndppp_apply_cal, get_lbcs_catalogue, calibrator_loop1, createmap_plots, destmap_plots, cp_closure_phase_png, closure_phase_file, find_delay_cal, delay_cal_model, delay_cal_model_map, createmap_tables, calib_cal, h5imp_cal, copy_h5imp_cal, process_losoto, convert_ct, ampl, plots, createmap_cal_pngs, copy_cal_pngs, createmap_cal_txts, copy_cal_txts, mk_cal_values_dir, createmap_cal_npys, copy_cal_npys, copyST_gains, match_delay_file, ndppp_apply_delay ]
 ## the step 'ampl' needs to be inserted after 'process_losoto' -- it won't work with less than 20 subbands, so i've removed it for testing purposes.
 #createmap_plots, cp_closure_phase_png, get_imaging_catalogue, imaging_loop ]
 
@@ -65,7 +65,7 @@ pipeline.steps = [mk_results_dir, mk_calresults_dir, mk_inspect_dir, mk_ionex_di
 ! closure_phase_file            = {{ job_directory }}/closure_phases.txt ## pipeline expects this location - do not change
 
 ## Runtime setup -- will depend on your computing cluster
-! num_proc_per_node        	= 8    ## number of processes to use per step per node
+! num_proc_per_node        	= input.output.max_per_node    ## number of processes to use per step per node
 ! num_proc_per_node_limit  	= 4	## number of processes to use per step per node for tasks with high i/o (dppp or cp) or memory (eg calibration)
 ! max_dppp_threads          	= 2	## number of threads per process for NDPPP
 ! error_tolerance               = False ## False = stop if any subband fails, True = keep going
@@ -87,7 +87,7 @@ pipeline.steps = [mk_results_dir, mk_calresults_dir, mk_inspect_dir, mk_ionex_di
 ! update_ISgains_script             = {{ long_baseline_pipeline_dir }}/bin/addISgains.py
 ! add_IS_script                     = {{ long_baseline_pipeline_dir }}/bin/addInternationalStations.py
 ! download_lbcs_script              = {{ long_baseline_pipeline_dir }}/bin/download_lbcs_catalogue.py
-! closure_phase_script              = {{ long_baseline_pipeline_dir }}/bin/closure_v2.py
+! closure_phase_script              = {{ long_baseline_pipeline_dir }}/bin/closure_v3.py
 ! skynet_script                     = {{ long_baseline_pipeline_dir }}/bin/skynet_master.py
 ! model_engine_script               = {{ long_baseline_pipeline_dir }}/bin/model_engine.py
 ! execute_circ_conv_script          = {{ long_baseline_pipeline_dir }}/bin/execute_circ_pol_conv.py
@@ -98,10 +98,12 @@ pipeline.steps = [mk_results_dir, mk_calresults_dir, mk_inspect_dir, mk_ionex_di
 ! delay_cal_parset                  = {{ long_baseline_pipeline_dir }}/parsets/delaycalib.parset
 ! firstnpy_file                     = {{ long_baseline_pipeline_dir }}/data/first_2008.simple.npy
 ! convert_ct_script		    = {{ long_baseline_pipeline_dir }}/bin/convert_clocktec_to_npy.py
+! losoto_parset			    = {{ long_baseline_pipeline_dir }}/parsets/losoto.parset
+! copyST_gains_script		    = {{ long_baseline_pipeline_dir }}/bin/copySTgains_toCS.py
 
 ## Configuration for prefactor scripts (update prefactor_dir at top)
-! losoto_importer       = {{ prefactor_dir }}/scripts/losotoImporter.py
-! fitamps_script        = {{ prefactor_dir }}/scripts/amplitudes_losoto_3.py
+! losoto_importer       = {{ long_baseline_pipeline_dir }}/bin/losotoImporter.py
+! fitamps_script        = {{ long_baseline_pipeline_dir }}/bin/amplitudes_losoto_3.py
 # ! plotsols_script       = {{ prefactor_dir }}/scripts/examine_npys.py
 ! plotsols_script       = {{ long_baseline_pipeline_dir }}/bin/examine_npys_losoto.py
 ! sort_concat_script    = {{ prefactor_dir }}/scripts/sort_times_into_freqGroups.py
@@ -307,6 +309,7 @@ ndppp_apply_cal.argument.applybeam.usechannelfreq = True
 ndppp_apply_cal.argument.applybeam.updateweights  = True
 ndppp_apply_cal.argument.applyrotate.type         = applycal
 ndppp_apply_cal.argument.applyrotate.parmdb       = transfer_amp_clock_sols.output.transfer_parmDB.mapfile
+ndppp_apply_cal.argument.applyrotate.correction	  = commonrotationangle
 ndppp_apply_cal.argument.applyphase.type	  = applycal
 ndppp_apply_cal.argument.applyphase.parmdb	  = parmdbs
 ndppp_apply_cal.argument.applyphase.correction	  = gain
@@ -419,6 +422,7 @@ dppp_concat.argument.numthreads           = {{ max_dppp_threads }}
 closure_phase.control.type                = pythonplugin
 closure_phase.control.executable          = {{ closure_phase_script }}
 closure_phase.argument.flags              = [dppp_concat.output.mapfile, {{ closure_phase_stations }}]
+closure_phase.argument.doplot		  = True
 
 # clean up the individual subband files -- keep only the concatenated calibrator data
 delete_intermediate_files.control.kind		  = recipe
@@ -545,37 +549,11 @@ copy_h5imp_cal.control.arguments          =  [source,{{ inspection_directory }}]
 process_losoto.control.kind                                    =  recipe
 process_losoto.control.type                                    =  executable_args
 process_losoto.control.executable                              =  {{ losoto_executable }}
-process_losoto.control.max_per_node                            =  {{ num_proc_per_node }}
-process_losoto.control.parsetasfile                            =  True
-process_losoto.control.args_format                             =  losoto
-process_losoto.control.mapfiles_in                             =  [h5imp_cal.output.h5parm.mapfile]
-process_losoto.control.inputkeys                               =  [hdf5file]
-process_losoto.argument.flags                                  =  [hdf5file]
-process_losoto.argument.LoSoTo.Steps                           =  [ClockTec,plotCLOCK,plotTEC]
-process_losoto.argument.LoSoTo.Solset                          =  [sol000]
-process_losoto.argument.LoSoTo.Soltab                          =  []
-process_losoto.argument.LoSoTo.SolType                         =  []
-process_losoto.argument.LoSoTo.ant                             =  []
-process_losoto.argument.LoSoTo.pol                             =  []
-process_losoto.argument.LoSoTo.dir                             =  []
-process_losoto.argument.LoSoTo.Steps.ClockTec.Operation        =  CLOCKTEC
-process_losoto.argument.LoSoTo.Steps.ClockTec.Soltab           =  [sol000/phase000]
-process_losoto.argument.LoSoTo.Steps.ClockTec.CombinePol       =  True
-process_losoto.argument.LoSoTo.Steps.ClockTec.FlagBadChannels  =  False
-process_losoto.argument.LoSoTo.Steps.ClockTec.Fit3rdOrder      =  False
-process_losoto.argument.LoSoTo.Steps.ClockTec.Circular         =  False
-process_losoto.argument.LoSoTo.Steps.plotCLOCK.Operation       =  PLOT
-process_losoto.argument.LoSoTo.Steps.plotCLOCK.Soltab          =  [sol000/clock000]
-process_losoto.argument.LoSoTo.Steps.plotCLOCK.Axes            =  [time]
-process_losoto.argument.LoSoTo.Steps.plotCLOCK.TableAxis       =  ant
-process_losoto.argument.LoSoTo.Steps.plotCLOCK.Prefix          =  {{ inspection_directory }}/losoto_clock
-process_losoto.argument.LoSoTo.Steps.plotCLOCK.PlotFlag        =  False
-process_losoto.argument.LoSoTo.Steps.plotTEC.Operation         =  PLOT
-process_losoto.argument.LoSoTo.Steps.plotTEC.Soltab            =  [sol000/tec000]
-process_losoto.argument.LoSoTo.Steps.plotTEC.Axes              =  [time]
-process_losoto.argument.LoSoTo.Steps.plotTEC.TableAxis         =  ant
-process_losoto.argument.LoSoTo.Steps.plotTEC.Prefix            =  {{ inspection_directory }}/losoto_tec
-process_losoto.argument.LoSoTo.Steps.plotTEC.PlotFlag          =  False
+process_losoto.control.parsetasfile                            =  False
+process_losoto.control.mapfile_in                              =  h5imp_cal.output.h5parm.mapfile
+process_losoto.control.inputkey                                =  h5gvds
+process_losoto.argument.flags                                  =  [h5gvds,{{ losoto_parset }}]
+
 
 ## convert the clock-tec values to numpy arrays
 convert_ct.control.kind          = recipe
@@ -674,19 +652,20 @@ copyST_gains.argument.flags		= [tables,ndppp_prep_target.output.mapfile]
 match_delay_file.control.kind                             = plugin
 match_delay_file.control.type                             = FindCorrespondingMSnew
 match_delay_file.control.mapfile_dir                      = input.output.mapfile_dir
-match_delay_file.control.filename                         = match_files.mapfile
+match_delay_file.control.filename                         = match_delay_file.mapfile
 match_delay_file.control.mapfile_grpd                     = createmap_tables.output.mapfile
 match_delay_file.control.mapfile_ms                       = ndppp_prep_target.output.mapfile
 
 # Apply the gain solutions directly to the data -- no need to remove time dependence
 ndppp_apply_delay.control.type                         = dppp
+ndppp_apply_delay.control.inplace		       = True
 ndppp_apply_delay.control.max_per_node                 = {{ num_proc_per_node }}
 ndppp_apply_delay.control.error_tolerance              = {{ error_tolerance }}
 ndppp_apply_delay.control.outputkey                    =
-ndppp_apply_delay.control.mapfiles_in                  = [match_files.output.parmdbs,match_delay_file.output.parmdbs]
-ndppp_apply_delay.control.inputkeys                    = [parmdbs,delparmdb]
+ndppp_apply_delay.control.mapfiles_in                  = [ndppp_prep_target.output.mapfile,match_files.output.parmdbs,match_delay_file.output.parmdbs,transfer_amp_clock_sols.output.transfer_parmDB.mapfile]
+ndppp_apply_delay.control.inputkeys                    = [inputms,parmdbs,delparmdb,ampclockparmdb]
 ndppp_apply_delay.argument.numthreads                  = {{ max_dppp_threads }}
-ndppp_apply_delay.argument.msin                        = ndppp_prep_target.output.mapfile
+ndppp_apply_delay.argument.msin                        = inputms
 ndppp_apply_delay.argument.msin.datacolumn             = DATA
 ndppp_apply_delay.argument.msin.baseline               = *&
 ndppp_apply_delay.argument.msout                       = .
@@ -694,17 +673,18 @@ ndppp_apply_delay.argument.msout.datacolumn            = CORRECTED_DATA
 ndppp_apply_delay.argument.msout.writefullresflag      = False
 ndppp_apply_delay.argument.steps                       = [applyclock,applygain,applybeam,applyrotate,applyphase,applydelay]
 ndppp_apply_delay.argument.applyclock.type             = applycal
-ndppp_apply_delay.argument.applyclock.parmdb           = map_transfer_amp_clock_sols.output.mapfile
+ndppp_apply_delay.argument.applyclock.parmdb           = ampclockparmdb
 ndppp_apply_delay.argument.applyclock.correction       = clock
 ndppp_apply_delay.argument.applygain.type              = applycal
-ndppp_apply_delay.argument.applygain.parmdb            = map_transfer_amp_clock_sols.output.mapfile
+ndppp_apply_delay.argument.applygain.parmdb            = ampclockparmdb
 ndppp_apply_delay.argument.applygain.correction        = gain
 ndppp_apply_delay.argument.applygain.updateweights     = True
 ndppp_apply_delay.argument.applybeam.type              = applybeam
 ndppp_apply_delay.argument.applybeam.usechannelfreq    = True
 ndppp_apply_delay.argument.applybeam.updateweights     = True
 ndppp_apply_delay.argument.applyrotate.type            = applycal
-ndppp_apply_delay.argument.applyrotate.parmdb          = map_transfer_amp_clock_sols.output.mapfile
+ndppp_apply_delay.argument.applyrotate.parmdb          = ampclockparmdb
+ndppp_apply_delay.argument.applyrotate.correction      = commonrotationangle
 ndppp_apply_delay.argument.applyphase.type             = applycal
 ndppp_apply_delay.argument.applyphase.parmdb           = parmdbs
 ndppp_apply_delay.argument.applyphase.correction       = gain
