@@ -20,7 +20,7 @@ def main(vis, closure_tels='DE601;DE602;DE603;DE604;DE605;FR606;SE607;UK608;DE60
     cfloor = float(cfloor)
     conv_criteria = float(conv_criteria)
 
-    vis1 = vis + '.ms' ## so the next line will work if it doesn't end in ms
+    vis1 = vis.rstrip('/') + '.ms' ## so the next line will work if it doesn't end in ms
     fitsout = vis1.replace('.MS','.fits').replace('.ms','.fits')
 
     ## remove any telescopes from the default list
@@ -169,6 +169,9 @@ def main(vis, closure_tels='DE601;DE602;DE603;DE604;DE605;FR606;SE607;UK608;DE60
         finalout = out1.blur_gauss(beamparams,0.5)
 
         ## save to fits
+	out.save_fits('./' + imfile + '_0_im.fits')
+	outblur.save_fits('./' + imfile + '_0_im_blur.fits')
+
         out1.save_fits('./' + imfile + 'im.fits')
         finalout.save_fits('./' + imfile + 'im_blur.fits')
 
