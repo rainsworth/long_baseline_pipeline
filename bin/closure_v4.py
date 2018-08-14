@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 import sys,os,time,numpy as np,pyrap,matplotlib
+matplotlib.use('Agg')
 from pyrap import tables as pt
 from matplotlib import pyplot as plt
 
@@ -21,6 +22,14 @@ from matplotlib import pyplot as plt
 # large data file into a separate measurement set and only then indexes
 # individual baselines into the smaller dataset. (I have done some timing
 # and think that this is the fastest way to do this).
+#
+# NJ 2018 May 19 v4
+#
+#   modified. instead of producing closure phase at the input time resolution,
+#   will average by factors of up to 30 and produce the best closure phase
+#   statistic. This is the best obtainable statistic with data averaging,
+#   limited by the time at which the coherence on the individual baselines
+#   is bad. See Lofar-LB memo number 3.
 #
 # arguments:
 #    vis = visibility file name
@@ -74,7 +83,7 @@ def closure(vis,tel,lastv=-1,pol=0,use_spw=0,bchan=0,echan=-1,\
 
     if len(notfound):
         print 'The following telescopes were not found:',notfound
-        print 'If no telescopes were found, check that TaQL is installed.'
+
 
     aidx_s = np.sort(aidx)
 
@@ -120,7 +129,7 @@ def closure(vis,tel,lastv=-1,pol=0,use_spw=0,bchan=0,echan=-1,\
         ut = t1.select('TIME')
         spw = t1.select('DATA_DESC_ID')
         d1,d2,d3 = t1.select('DATA'), t2.select('DATA'), t3.select('DATA')
-        cp = get_amp_clph(d1[:lastv],d2[:lastv],d3[:lastv],spw[:lastv],
+        clthis, cp = get_amp_clph(d1[:lastv],d2[:lastv],d3[:lastv],spw[:lastv],
              pol=0, use_spw=use_spw, bchan=bchan, echan=echan)
         try:
             allcp.append(cp)
@@ -130,7 +139,7 @@ def closure(vis,tel,lastv=-1,pol=0,use_spw=0,bchan=0,echan=-1,\
         os.system('rm -fr closure_temp*ms')
         if os.path.exists ('closure_which'):
             os.system('rm closure_which')
-        clstats = np.append (clstats, np.nanmean(np.gradient(np.unwrap(cp))**2))
+        clstats = np.append (clstats, clthis)
     if doplot:
         cl_mkplot (allcp,tel,target_id)
     clstats = clstats[0] if len(clstats)==1 else clstats
@@ -157,7 +166,7 @@ def get_amp_clph(d1,d2,d3,spw,pol=0,use_spw=0,bchan=0,echan=-1):
     p1,p2,p3 = np.array([]),np.array([]),np.array([])
     nchan = np.int(len(d1[0]['DATA']))
     bchan = max(bchan,0)
-    if echan==-1 or echan<nchan:
+    if echan==-1 or echan>nchan:  # bugfix
         echan=nchan
     for i in range(len(d1)):
         if spw[i].values()[0] != use_spw:
@@ -169,8 +178,24 @@ def get_amp_clph(d1,d2,d3,spw,pol=0,use_spw=0,bchan=0,echan=-1):
         p1 = np.append(p1, np.arctan2 (pd1.imag,pd1.real))
         p2 = np.append(p2, np.arctan2 (pd2.imag,pd2.real))
         p3 = np.append(p3, np.arctan2 (pd3.imag,pd3.real))
-    return p1+p2-p3
+    clph = p1+p2-p3
+    clph = clph[~np.isnan(clph)]
+    np.putmask (clph,clph<-np.pi,clph+2*np.pi)
+    np.putmask (clph,clph>np.pi,clph-2*np.pi)
+    x,y,z = np.arange(1,30),np.array([]),np.array([])
+    for i in x:
+        y = np.append(y,np.mean(np.gradient(np.unwrap(phavg(clph,i)))**2))
+    pfit = np.polyfit (x,y,3)
+    for i in x:
+        z = np.append(z,np.poly1d(pfit)(i))
+    return z.min(),clph
 
+def phavg (phase, n):
+    phase = phase[0:n*(len(phase)//n)]
+    rreal,rimag = np.cos(phase), np.sin(phase)
+    arreal = np.average (np.reshape(rreal,(-1,n)),axis=1)
+    arimag = np.average (np.reshape(rimag,(-1,n)),axis=1)
+    return np.arctan2 (arimag, arreal)
 
 #ctel = 'ST001;DE601;DE603;ST001;FR606;DE609'
 #closure ('L328370.ms',ctel,doplot=True)
@@ -198,7 +223,6 @@ def main(ms_input,station_input,lastv=-1,pol=0,use_spw=0,bchan=0,\
     dopipe  (bool, default True): For backwards compatibility. If dopipe
             is True, will write text in the closure_phase file as before.
             If True, station_input will be truncated to 3 stations.
-
         
     Returns
     -------
@@ -232,4 +256,3 @@ def main(ms_input,station_input,lastv=-1,pol=0,use_spw=0,bchan=0,\
 
     if not dopipe:
         return allret
-
